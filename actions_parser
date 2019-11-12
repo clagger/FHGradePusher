@@ -1,0 +1,76 @@
+import requests
+from bs4 import BeautifulSoup
+import csv
+from pushbullet import Pushbullet
+
+USERNAME = "username"
+PASSWORD = "password"
+
+LOGIN_URL = "https://actions.fh-joanneum.at/j_acegi_security_check"
+DATA_URL = "URL of actions grade page"
+
+API_KEY = "Pushbullet API Key"
+CHANNEL = "Name of your Pushbullet Channel / Device"
+
+
+def main():
+    session_requests = requests.session()
+
+    # Get login csrf token
+    session_requests.get(LOGIN_URL)
+
+    # Create payload
+    payload = {
+        "j_domain": "technikum",
+        "j_username": USERNAME,
+        "j_password": PASSWORD
+    }
+
+    # Perform login
+    session_requests.post(LOGIN_URL, data=payload, headers=dict(referer=LOGIN_URL))
+
+    # Scrape url
+    result_data = session_requests.get(DATA_URL, headers=dict(referer=DATA_URL))
+    soup = BeautifulSoup(result_data.content, features="lxml")
+
+    # parse grades
+    data = []
+    table = soup.find('table', id='marksTable')
+    rows = table.findAll('tr')
+    for row in rows:
+        cols = row.find_all('td')
+        cols = [ele.text.strip() for ele in cols]
+        if len(cols) != 0 and len(cols) > 5:
+            if cols[0] != "Lehrveranstaltung" or cols[0] != "Anzahl":  # ignore header and statistic lines
+                data.append([cols[0], cols[2], cols[5]])
+
+    new_grades = False
+    difference = 0
+
+    # compare grades from last execution with current read
+    with open('grades.csv', mode='r') as csv_file:
+        csv_reader = csv.reader(csv_file)
+        len_file = sum(1 for row in csv_reader)
+        if len(data) > len_file:
+            new_grades = True
+            difference = len(data) - len_file
+
+    if difference != 0:
+        # add new entries to file
+        with open('grades.csv', mode='a+', newline='') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerows(data[-difference:])
+            csv_file.close()
+
+    if new_grades:
+        print("Wrote ", difference)
+
+        # push to pushbullet
+        pb = Pushbullet(API_KEY)
+        my_channel = pb.get_channel(CHANNEL)
+        for new_grade in data[-difference:]:
+            my_channel.push_note("New grade", ', '.join(new_grade))
+
+
+if __name__ == '__main__':
+    main()
